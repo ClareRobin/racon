@@ -23,6 +23,7 @@ static const int32_t CUDAALIGNER_BAND_WIDTH_INPUT_CODE = 10001;
 static struct option options[] = {
     {"include-unpolished", no_argument, 0, 'u'},
     {"fragment-correction", no_argument, 0, 'f'},
+    {"seam-window", required_argument, 0, 'S'},
     {"window-length", required_argument, 0, 'w'},
     {"quality-threshold", required_argument, 0, 'q'},
     {"error-threshold", required_argument, 0, 'e'},
@@ -52,6 +53,7 @@ int main(int argc, char** argv) {
     double quality_threshold = 10.0;
     double error_threshold = 0.3;
     bool trim = true;
+    uint32_t seam_length = 0;
 
     int8_t match = 3;
     int8_t mismatch = -5;
@@ -82,6 +84,9 @@ int main(int argc, char** argv) {
                 break;
             case 'w':
                 window_length = atoi(optarg);
+                break;
+            case 'S':
+                seam_length = atoi(optarg);
                 break;
             case 'q':
                 quality_threshold = atof(optarg);
@@ -156,6 +161,12 @@ int main(int argc, char** argv) {
         cudapoa_batches, cuda_banded_alignment, cudaaligner_batches,
         cudaaligner_band_width);
 
+    if (seam_length > 0 && (seam_length < 8 || seam_length >= window_length)) {
+        fprintf(stderr, "[racon::] error: --seam-window must be >= 8 and < window length!\n");
+        exit(1);
+    }
+    polisher->set_seam_length(seam_length);
+
     polisher->initialize();
 
     std::vector<std::unique_ptr<racon::Sequence>> polished_sequences;
@@ -186,6 +197,10 @@ void help() {
         "    options:\n"
         "        -u, --include-unpolished\n"
         "            output unpolished target sequences\n"
+        "        --seam-window <int>\n"
+        "            default: 0 (off)\n"
+        "            also polish windows of this length centred on each window\n"
+        "            boundary and splice their centres over the boundaries\n"
         "        -f, --fragment-correction\n"
         "            perform fragment correction instead of contig polishing\n"
         "            (overlaps file should contain dual/self overlaps!)\n"

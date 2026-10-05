@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <unordered_set>
 #include <iostream>
+#include <functional>
 
 #include "overlap.hpp"
 #include "sequence.hpp"
@@ -20,6 +21,7 @@
 #include "bioparser/bioparser.hpp"
 #include "thread_pool/thread_pool.hpp"
 #include "spoa/spoa.hpp"
+#include "edlib.h"
 
 namespace racon {
 
@@ -398,24 +400,47 @@ void Polisher::initialize() {
         id_to_first_window_id[i + 1] = id_to_first_window_id[i] + k;
     }
 
+    // seam windows centred on each boundary between consecutive windows
+    uint32_t seam_half = seam_length_ / 2;
+    id_to_first_seam_id_.assign(targets_size + 1, 0);
+    for (uint64_t i = 0; i < targets_size && seam_length_ > 0; ++i) {
+        uint32_t data_size = sequences_[i]->data().size();
+        uint32_t k = 0;
+        for (uint32_t b = window_length_; b < data_size; b += window_length_, ++k) {
+            uint32_t start = b - seam_half;
+            uint32_t length = std::min(start + seam_length_, data_size) - start;
+
+            seam_windows_.emplace_back(createWindow(i, k, window_type,
+                &(sequences_[i]->data()[start]), length,
+                sequences_[i]->quality().empty() ? &(dummy_quality_[0]) :
+                &(sequences_[i]->quality()[start]), length));
+        }
+        id_to_first_seam_id_[i + 1] = id_to_first_seam_id_[i] + k;
+    }
+
     targets_coverages_.resize(targets_size, 0);
 
-    for (uint64_t i = 0; i < overlaps.size(); ++i) {
+    // window_of(t_id, t_pos) -> (window id, window start on target, window length)
+    auto add_layers = [&](const Overlap& overlap,
+        const std::vector<std::pair<uint32_t, uint32_t>>& breaking_points,
+        std::vector<std::shared_ptr<Window>>& windows,
+        const std::function<void(uint32_t, uint64_t&, uint32_t&, uint32_t&)>& window_of) -> void {
 
-        ++targets_coverages_[overlaps[i]->t_id()];
-
-        const auto& sequence = sequences_[overlaps[i]->q_id()];
-        const auto& breaking_points = overlaps[i]->breaking_points();
+        const auto& sequence = sequences_[overlap.q_id()];
 
         for (uint32_t j = 0; j < breaking_points.size(); j += 2) {
-            if (breaking_points[j + 1].second - breaking_points[j].second < 0.02 * window_length_) {
+            uint64_t window_id;
+            uint32_t window_start, length;
+            window_of(breaking_points[j].first, window_id, window_start, length);
+
+            if (breaking_points[j + 1].second - breaking_points[j].second < 0.02 * length) {
                 continue;
             }
 
             if (!sequence->quality().empty() ||
                 !sequence->reverse_quality().empty()) {
 
-                const auto& quality = overlaps[i]->strand() ?
+                const auto& quality = overlap.strand() ?
                     sequence->reverse_quality() : sequence->quality();
                 double average_quality = 0;
                 for (uint32_t k = breaking_points[j].second; k < breaking_points[j + 1].second; ++k) {
@@ -428,18 +453,13 @@ void Polisher::initialize() {
                 }
             }
 
-            uint64_t window_id = id_to_first_window_id[overlaps[i]->t_id()] +
-                breaking_points[j].first / window_length_;
-            uint32_t window_start = (breaking_points[j].first / window_length_) *
-                window_length_;
-
-            const char* data = overlaps[i]->strand() ?
+            const char* data = overlap.strand() ?
                 &(sequence->reverse_complement()[breaking_points[j].second]) :
                 &(sequence->data()[breaking_points[j].second]);
             uint32_t data_length = breaking_points[j + 1].second -
                 breaking_points[j].second;
 
-            const char* quality = overlaps[i]->strand() ?
+            const char* quality = overlap.strand() ?
                 (sequence->reverse_quality().empty() ?
                     nullptr : &(sequence->reverse_quality()[breaking_points[j].second]))
                 :
@@ -447,10 +467,33 @@ void Polisher::initialize() {
                     nullptr : &(sequence->quality()[breaking_points[j].second]));
             uint32_t quality_length = quality == nullptr ? 0 : data_length;
 
-            windows_[window_id]->add_layer(data, data_length,
+            windows[window_id]->add_layer(data, data_length,
                 quality, quality_length,
                 breaking_points[j].first - window_start,
                 breaking_points[j + 1].first - window_start - 1);
+        }
+    };
+
+    for (uint64_t i = 0; i < overlaps.size(); ++i) {
+
+        ++targets_coverages_[overlaps[i]->t_id()];
+        uint64_t t_id = overlaps[i]->t_id();
+
+        add_layers(*overlaps[i], overlaps[i]->breaking_points(), windows_,
+            [&](uint32_t t_pos, uint64_t& id, uint32_t& start, uint32_t& length) -> void {
+                id = id_to_first_window_id[t_id] + t_pos / window_length_;
+                start = (t_pos / window_length_) * window_length_;
+                length = window_length_;
+            });
+
+        if (seam_length_ > 0) {
+            add_layers(*overlaps[i], overlaps[i]->seam_breaking_points(), seam_windows_,
+                [&](uint32_t t_pos, uint64_t& id, uint32_t& start, uint32_t& length) -> void {
+                    uint32_t k = (t_pos + seam_half) / window_length_; // boundary k * w
+                    id = id_to_first_seam_id_[t_id] + k - 1;
+                    start = k * window_length_ - seam_half;
+                    length = seam_length_;
+                });
         }
 
         overlaps[i].reset();
@@ -465,7 +508,7 @@ void Polisher::find_overlap_breaking_points(std::vector<std::unique_ptr<Overlap>
     for (uint64_t i = 0; i < overlaps.size(); ++i) {
         thread_futures.emplace_back(thread_pool_->submit(
             [&](uint64_t j) -> void {
-                overlaps[j]->find_breaking_points(sequences_, window_length_);
+                overlaps[j]->find_breaking_points(sequences_, window_length_, seam_length_);
             }, i));
     }
 
@@ -503,6 +546,23 @@ void Polisher::polish(std::vector<std::unique_ptr<Sequence>>& dst,
             }, i));
     }
 
+    // seam windows are spliced in by their centre only, so their ends are not trimmed
+    std::vector<std::future<bool>> seam_futures;
+    for (uint64_t i = 0; i < seam_windows_.size(); ++i) {
+        seam_futures.emplace_back(thread_pool_->submit(
+            [&](uint64_t j) -> bool {
+                auto it = thread_to_id_.find(std::this_thread::get_id());
+                if (it == thread_to_id_.end()) {
+                    fprintf(stderr, "[racon::Polisher::polish] error: "
+                        "thread identifier not present!\n");
+                    exit(1);
+                }
+                return seam_windows_[j]->generate_consensus(
+                    alignment_engines_[it->second], false);
+            }, i));
+    }
+    std::vector<uint64_t> window_offsets; // start of each window's consensus in polished_data
+
     std::string polished_data = "";
     uint32_t num_polished_windows = 0;
 
@@ -512,9 +572,23 @@ void Polisher::polish(std::vector<std::unique_ptr<Sequence>>& dst,
         thread_futures[i].wait();
 
         num_polished_windows += thread_futures[i].get() == true ? 1 : 0;
+        window_offsets.emplace_back(polished_data.size());
         polished_data += windows_[i]->consensus();
 
         if (i == windows_.size() - 1 || windows_[i + 1]->rank() == 0) {
+            if (seam_length_ > 0) {
+                uint64_t t_id = windows_[i]->id();
+                // right to left, so offsets of earlier windows stay valid
+                for (uint64_t k = id_to_first_seam_id_[t_id + 1]; k-- > id_to_first_seam_id_[t_id];) {
+                    uint32_t rank = k - id_to_first_seam_id_[t_id] + 1; // boundary before window rank
+                    if (seam_futures[k].get() == true && rank < window_offsets.size()) {
+                        num_spliced_seams_ += splice_seam(polished_data,
+                            window_offsets[rank], seam_windows_[k]->consensus());
+                    }
+                    seam_windows_[k].reset();
+                }
+            }
+            window_offsets.clear();
             double polished_ratio = num_polished_windows /
                 static_cast<double>(windows_[i]->rank() + 1);
 
@@ -543,8 +617,63 @@ void Polisher::polish(std::vector<std::unique_ptr<Sequence>>& dst,
         logger_->log("[racon::Polisher::polish] generated consensus");
     }
 
+    if (seam_length_ > 0) {
+        fprintf(stderr, "[racon::Polisher::polish] spliced %lu / %zu seam windows\n",
+            num_spliced_seams_, seam_windows_.size());
+    }
+
     std::vector<std::shared_ptr<Window>>().swap(windows_);
+    std::vector<std::shared_ptr<Window>>().swap(seam_windows_);
     std::vector<std::unique_ptr<Sequence>>().swap(sequences_);
+}
+
+uint32_t Polisher::splice_seam(std::string& data, uint64_t boundary,
+    const std::string& seam) {
+
+    // Locate the seam consensus in the joined window consensuses around the
+    // boundary (infix alignment), then replace only the central half of the
+    // seam, keeping both seam ends and window ends out of the result.
+    if (seam.size() < 8 || boundary > data.size()) {
+        return 0;
+    }
+    uint64_t region_begin = boundary > 2 * seam.size() ? boundary - 2 * seam.size() : 0;
+    uint64_t region_end = std::min<uint64_t>(data.size(), boundary + 2 * seam.size());
+
+    EdlibAlignResult result = edlibAlign(seam.c_str(), seam.size(),
+        data.c_str() + region_begin, region_end - region_begin,
+        edlibNewAlignConfig(seam.size() / 5, EDLIB_MODE_HW, EDLIB_TASK_PATH,
+            nullptr, 0));
+    if (result.status != EDLIB_STATUS_OK || result.editDistance < 0 ||
+        result.numLocations == 0) {
+        edlibFreeAlignResult(result);
+        return 0;
+    }
+
+    uint32_t core_begin = seam.size() / 4, core_end = seam.size() - seam.size() / 4;
+    int64_t s_pos = 0, r_pos = result.startLocations[0];
+    int64_t r_core_begin = -1, r_core_end = -1;
+    for (int32_t i = 0; i < result.alignmentLength; ++i) {
+        if (s_pos == core_begin && r_core_begin < 0) {
+            r_core_begin = r_pos;
+        }
+        if (s_pos == core_end && r_core_end < 0) {
+            r_core_end = r_pos;
+        }
+        switch (result.alignment[i]) {
+            case EDLIB_EDOP_MATCH:
+            case EDLIB_EDOP_MISMATCH: ++s_pos; ++r_pos; break;
+            case EDLIB_EDOP_INSERT: ++s_pos; break; // extra base in seam
+            case EDLIB_EDOP_DELETE: ++r_pos; break; // extra base in data
+        }
+    }
+    edlibFreeAlignResult(result);
+
+    if (r_core_begin < 0 || r_core_end < r_core_begin) {
+        return 0;
+    }
+    data.replace(region_begin + r_core_begin, r_core_end - r_core_begin,
+        seam, core_begin, core_end - core_begin);
+    return 1;
 }
 
 }

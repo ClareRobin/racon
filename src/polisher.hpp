@@ -56,6 +56,12 @@ public:
     virtual void polish(std::vector<std::unique_ptr<Sequence>>& dst,
         bool drop_unpolished_sequences);
 
+    // Also polish small windows of seam_length centred on each window boundary
+    // and splice their centres over the boundaries (0 = off). Call before initialize().
+    void set_seam_length(uint32_t seam_length) {
+        seam_length_ = seam_length;
+    }
+
     friend std::unique_ptr<Polisher> createPolisher(const std::string& sequences_path,
         const std::string& overlaps_path, const std::string& target_path,
         PolisherType type, uint32_t window_length, double quality_threshold,
@@ -73,6 +79,8 @@ protected:
     Polisher(const Polisher&) = delete;
     const Polisher& operator=(const Polisher&) = delete;
     virtual void find_overlap_breaking_points(std::vector<std::unique_ptr<Overlap>>& overlaps);
+    static uint32_t splice_seam(std::string& data, uint64_t boundary,
+        const std::string& seam);
 
     std::unique_ptr<bioparser::Parser<Sequence>> sparser_;
     std::unique_ptr<bioparser::Parser<Overlap>> oparser_;
@@ -90,6 +98,11 @@ protected:
 
     uint32_t window_length_;
     std::vector<std::shared_ptr<Window>> windows_;
+
+    uint32_t seam_length_ = 0;
+    std::vector<std::shared_ptr<Window>> seam_windows_;
+    std::vector<uint64_t> id_to_first_seam_id_;
+    uint64_t num_spliced_seams_ = 0;
 
     std::unique_ptr<thread_pool::ThreadPool> thread_pool_;
     std::unordered_map<std::thread::id, uint32_t> thread_to_id_;

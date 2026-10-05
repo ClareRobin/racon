@@ -111,7 +111,7 @@ Overlap::Overlap()
         : q_name_(), q_id_(), q_begin_(), q_end_(), q_length_(), t_name_(),
         t_id_(), t_begin_(), t_end_(), t_length_(), strand_(), length_(),
         error_(), cigar_(), is_valid_(true), is_transmuted_(true),
-        breaking_points_(), dual_breaking_points_() {
+        breaking_points_(), dual_breaking_points_(), seam_breaking_points_() {
 }
 
 template<typename T>
@@ -177,7 +177,7 @@ void Overlap::transmute(const std::vector<std::unique_ptr<Sequence>>& sequences,
 }
 
 void Overlap::find_breaking_points(const std::vector<std::unique_ptr<Sequence>>& sequences,
-    uint32_t window_length) {
+    uint32_t window_length, uint32_t seam_length) {
 
     if (!is_transmuted_) {
         fprintf(stderr, "[racon::Overlap::find_breaking_points] error: "
@@ -198,6 +198,9 @@ void Overlap::find_breaking_points(const std::vector<std::unique_ptr<Sequence>>&
     }
 
     find_breaking_points_from_cigar(window_length);
+    if (seam_length > 0) {
+        find_seam_breaking_points_from_cigar(window_length, seam_length);
+    }
 
     std::string().swap(cigar_);
 }
@@ -283,6 +286,81 @@ void Overlap::find_breaking_points_from_cigar(uint32_t window_length)
                     found_first_match = false;
                     ++w;
                 }
+                ++k;
+            }
+        } else if (cigar_[i] == 'S' || cigar_[i] == 'H' || cigar_[i] == 'P') {
+            j = i + 1;
+        }
+    }
+}
+
+void Overlap::find_seam_breaking_points_from_cigar(uint32_t window_length,
+    uint32_t seam_length)
+{
+    // seam windows are centred on the boundaries between consecutive windows;
+    // unlike regular windows they do not tile the target, so track starts too
+    uint32_t half = seam_length / 2;
+    std::vector<std::pair<int32_t, int32_t>> seams; // inclusive [start, end]
+    for (uint32_t b = window_length; b < t_length_ && b - half < t_end_; b += window_length) {
+        int32_t start = std::max(b - half, t_begin_);
+        int32_t end = std::min(std::min(b - half + seam_length, t_length_), t_end_) - 1;
+        if (end < static_cast<int32_t>(t_begin_) || start > end) {
+            continue;
+        }
+        seams.emplace_back(start, end);
+    }
+    if (seams.empty()) {
+        return;
+    }
+
+    uint32_t w = 0;
+    bool found_first_match = false;
+    std::pair<uint32_t, uint32_t> first_match = {0, 0}, last_match = {0, 0};
+
+    int32_t q_ptr = (strand_ ? (q_length_ - q_end_) : q_begin_) - 1;
+    int32_t t_ptr = t_begin_ - 1;
+
+    auto check_seam_end = [&]() -> void {
+        if (w < seams.size() && t_ptr == seams[w].second) {
+            if (found_first_match) {
+                seam_breaking_points_.emplace_back(first_match);
+                seam_breaking_points_.emplace_back(last_match);
+            }
+            found_first_match = false;
+            ++w;
+        }
+    };
+
+    for (uint32_t i = 0, j = 0; i < cigar_.size() && w < seams.size(); ++i) {
+        if (cigar_[i] == 'M' || cigar_[i] == '=' || cigar_[i] == 'X') {
+            uint32_t k = 0, num_bases = atoi(&cigar_[j]);
+            j = i + 1;
+            while (k < num_bases) {
+                ++q_ptr;
+                ++t_ptr;
+
+                if (w < seams.size() && t_ptr >= seams[w].first) {
+                    if (!found_first_match) {
+                        found_first_match = true;
+                        first_match.first = t_ptr;
+                        first_match.second = q_ptr;
+                    }
+                    last_match.first = t_ptr + 1;
+                    last_match.second = q_ptr + 1;
+                }
+                check_seam_end();
+
+                ++k;
+            }
+        } else if (cigar_[i] == 'I') {
+            q_ptr += atoi(&cigar_[j]);
+            j = i + 1;
+        } else if (cigar_[i] == 'D' || cigar_[i] == 'N') {
+            uint32_t k = 0, num_bases = atoi(&cigar_[j]);
+            j = i + 1;
+            while (k < num_bases) {
+                ++t_ptr;
+                check_seam_end();
                 ++k;
             }
         } else if (cigar_[i] == 'S' || cigar_[i] == 'H' || cigar_[i] == 'P') {

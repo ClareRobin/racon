@@ -84,7 +84,9 @@ bool Window::generate_consensus(std::shared_ptr<spoa::AlignmentEngine> alignment
     std::sort(rank.begin() + 1, rank.end(), [&](uint32_t lhs, uint32_t rhs) {
         return positions_[lhs].first < positions_[rhs].first; });
 
-    uint32_t offset = 0.01 * sequences_.front().second;
+    // at least 2 so that reads spanning a short (seam) window still take the
+    // whole-graph path; unchanged for windows >= 200 bp
+    uint32_t offset = std::max<uint32_t>(2, 0.01 * sequences_.front().second);
     for (uint32_t j = 1; j < sequences_.size(); ++j) {
         uint32_t i = rank[j];
 

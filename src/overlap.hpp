@@ -69,8 +69,13 @@ public:
         return breaking_points_;
     }
 
+    // seam windows: [k * window_length - seam_length / 2, + seam_length), k >= 1
+    const std::vector<std::pair<uint32_t, uint32_t>>& seam_breaking_points() const {
+        return seam_breaking_points_;
+    }
+
     void find_breaking_points(const std::vector<std::unique_ptr<Sequence>>& sequences,
-        uint32_t window_length);
+        uint32_t window_length, uint32_t seam_length = 0);
 
     friend bioparser::MhapParser<Overlap>;
     friend bioparser::PafParser<Overlap>;
@@ -98,6 +103,8 @@ private:
     Overlap(const Overlap&) = delete;
     const Overlap& operator=(const Overlap&) = delete;
     virtual void find_breaking_points_from_cigar(uint32_t window_length);
+    void find_seam_breaking_points_from_cigar(uint32_t window_length,
+        uint32_t seam_length);
     virtual void align_overlaps(const char* q, uint32_t q_len, const char* t, uint32_t t_len);
 
     std::string q_name_;
@@ -121,6 +128,7 @@ private:
     bool is_transmuted_;
     std::vector<std::pair<uint32_t, uint32_t>> breaking_points_;
     std::vector<std::pair<uint32_t, uint32_t>> dual_breaking_points_;
+    std::vector<std::pair<uint32_t, uint32_t>> seam_breaking_points_;
 };
 
 }
