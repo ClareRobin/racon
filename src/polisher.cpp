@@ -19,7 +19,6 @@
 
 #include "bioparser/bioparser.hpp"
 #include "thread_pool/thread_pool.hpp"
-#include "spoa/spoa.hpp"
 
 namespace racon {
 
@@ -179,9 +178,7 @@ Polisher::Polisher(std::unique_ptr<bioparser::Parser<Sequence>> sparser,
     }
 
     for (uint32_t i = 0; i < num_threads; ++i) {
-        alignment_engines_.emplace_back(spoa::createAlignmentEngine(
-            spoa::AlignmentType::kNW, match, mismatch, gap));
-        alignment_engines_.back()->prealloc(window_length_, 5);
+        alignment_engines_.emplace_back(createAbpoaEngine(match, mismatch, gap));
     }
 }
 

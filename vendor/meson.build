@@ -15,8 +15,13 @@ vendor_include_directories = [
                 include_directories('edlib/edlib/include'),
                 include_directories('rampler/src'),
                 include_directories('spoa/include'),
-                include_directories('thread_pool/include')
+                include_directories('thread_pool/include'),
+                include_directories('abPOA/include')
                 ]
+
+# abPOA: prebuilt static library (cd vendor/abPOA && make libabpoa OPT_FLAGS="-O3 -fPIC")
+abpoa_dep = declare_dependency(
+  link_args : [meson.current_source_dir() + '/abPOA/lib/libabpoa.a', '-lm'])
 
 vendor_extra_flags = []
 

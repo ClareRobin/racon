@@ -20,3 +20,6 @@
 	path = vendor/GenomeWorks
 	url = https://github.com/clara-parabricks/GenomeWorks.git
 	branch = master
+[submodule "vendor/abPOA"]
+	path = vendor/abPOA
+	url = https://github.com/yangao07/abPOA.git

@@ -17,6 +17,6 @@ racon_lib = library(
   version : meson.project_version(),
   install : racon_lib_install,
   link_with : vendor_lib,
-  dependencies : [racon_thread_dep, racon_zlib_dep],
+  dependencies : [racon_thread_dep, racon_zlib_dep, abpoa_dep],
   include_directories : racon_include_directories + vendor_include_directories,
   cpp_args : [racon_extra_flags, racon_warning_flags, racon_cpp_flags])

@@ -12,11 +12,12 @@
 #include <string>
 #include <utility>
 
-namespace spoa {
-    class AlignmentEngine;
-}
-
 namespace racon {
+
+// Per-thread abPOA alignment context (graph + parameters), reused across windows.
+struct AbpoaEngine;
+std::shared_ptr<AbpoaEngine> createAbpoaEngine(int8_t match, int8_t mismatch,
+    int8_t gap);
 
 enum class WindowType {
     kNGS, // Next Generation Sequencing
@@ -44,7 +45,7 @@ public:
         return consensus_;
     }
 
-    bool generate_consensus(std::shared_ptr<spoa::AlignmentEngine> alignment_engine,
+    bool generate_consensus(std::shared_ptr<AbpoaEngine> alignment_engine,
         bool trim);
 
     void add_layer(const char* sequence, uint32_t sequence_length,

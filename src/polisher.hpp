@@ -21,10 +21,6 @@ namespace thread_pool {
     class ThreadPool;
 }
 
-namespace spoa {
-    class AlignmentEngine;
-}
-
 
 namespace racon {
 
@@ -32,6 +28,7 @@ class Sequence;
 class Overlap;
 class Window;
 class Logger;
+struct AbpoaEngine;
 
 enum class PolisherType {
     kC, // Contig polishing
@@ -82,7 +79,7 @@ protected:
     double quality_threshold_;
     double error_threshold_;
     bool trim_;
-    std::vector<std::shared_ptr<spoa::AlignmentEngine>> alignment_engines_;
+    std::vector<std::shared_ptr<AbpoaEngine>> alignment_engines_;
 
     std::vector<std::unique_ptr<Sequence>> sequences_;
     std::vector<uint32_t> targets_coverages_;
